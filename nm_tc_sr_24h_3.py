@@ -24,6 +24,8 @@ matplotlib.use('Agg')          # no display needed
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from scipy.integrate import solve_ivp
+from scipy.signal import butter, sosfiltfilt
+from scipy.interpolate import interp1d
 
 HERE  = os.path.dirname(os.path.abspath(__file__))
 FS    = 100          # output sample rate [Hz]  (red=100 in the model)
@@ -204,12 +206,25 @@ _gGW=-1.68; _gAW=1.0; _gGR=-1.3; _gAR=1.6; _gER=-4.0; _gEN=-2.0
 _Hm=1.0; _thW=2.0; _thw=34830000; _ths=30600000; _kap=1.5
 
 # 0.02 Hz infraslow locus-coeruleus rhythm modulating NE release (period = 50 s)
-_ISO_A = 0.25                           # 25% amplitude modulation of NE target
-_ISO_w = 2.0 * math.pi * 0.02 / 1000  # rad/ms  (0.02 Hz → 50-s period)
+# Stochastic (smooth) ISO: bandpass-filtered Gaussian noise centred at 0.02 Hz.
+# sosfiltfilt is used for numerical stability at these low normalised frequencies.
+_ISO_A = 0.25
+def _build_iso_interp():
+    np.random.seed(7)
+    # 1-Hz grid over 24 h + 1 s padding
+    _t_s   = np.arange(T24 + 1, dtype=np.float64)          # seconds, 0 … 86400
+    _noise  = np.random.randn(len(_t_s))
+    _sos    = butter(4, [0.010, 0.040], btype='band', fs=1.0, output='sos')
+    _smooth = sosfiltfilt(_sos, _noise)
+    _smooth = _smooth / np.abs(_smooth).max() * _ISO_A      # normalise to ±_ISO_A
+    return interp1d(_t_s, 1.0 + _smooth, kind='linear',
+                    bounds_error=False,
+                    fill_value=(1.0 + _smooth[0], 1.0 + _smooth[-1]))
+_ne_iso_interp = _build_iso_interp()   # evaluated once at import
 
 def sr_odes(t, y):
     fW, fN, fR, CE, CG, CA, h = y
-    ne_iso = 1.0 + _ISO_A * math.sin(_ISO_w * t)   # 0.02 Hz LC rhythm
+    ne_iso = float(_ne_iso_interp(t * 1e-3))   # t in ms → seconds
     IW = _gGW*CG + _gAW*CA
     IN = _gEN*CE
     IR = _gER*CE + _gGR*CG + _gAR*CA
